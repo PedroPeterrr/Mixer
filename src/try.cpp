@@ -3,167 +3,139 @@
 #include <SPI.h>
 #include <MFRC522.h>
 
-// Define the SS_PIN and RST_PIN variables with appropriate pin numbers
-const int SS_PIN = 10; 
-const int RST_PIN = 9; 
+const int buttonPin = 8;    // the number of the pushbutton pin
+const int relayPin = A0;    // the analog pin number where the relay is connected
 
-// Create an instance of the MFRC522 class
-MFRC522 mfrc522(SS_PIN, RST_PIN);
+bool authorized = false;    // flag to check if RFID is authorized
+bool relayActive = false;   // flag to track relay activation
+unsigned long relayTimer;   // variable to store the start time of relay activation
+const unsigned long relayDuration = 10000; // relay activation duration in milliseconds (10 seconds)
 
-// Define the relay pin
-const int relayPin = A0;
-const int onButtonPin = 7; // Assuming push button is connected to pin 7
-const int offButtonPin = 6; // Assuming other button is connected to pin 6
-const int emergencyStopPin = 8; // Emergency stop button connected to pin 8
+#define RST_PIN 9  // Configurable, see typical pin layout above
+#define SS_PIN 10  // Configurable, see typical pin layout above
 
-// LED and Buzzer pins
-const int relayLedPin = 3;
-const int emergencyLedPin = 4;
-const int buzzerPin = 5;
+MFRC522 mfrc522(SS_PIN, RST_PIN);  // Create MFRC522 instance
 
-// Authorized RFID UID
-const String authorizedCardUID = "YOUR_AUTHORIZED_CARD_UID"; // Replace with your actual authorized card UID
-
-// Create an instance of the LiquidCrystal_I2C class
-LiquidCrystal_I2C lcd(0x27, 16, 2); // Set the LCD address to 0x27 for a 16 chars and 2 line display
+// Initialize the LCD, adjust the address (0x27) if necessary
+LiquidCrystal_I2C lcd(0x27, 16, 2);  // Adjust the address according to your actual I2C address
 
 void setup() {
-    // Initialize the serial communication
-    Serial.begin(9600);
-
-    // Initialize the RFID reader
-    SPI.begin();
-    mfrc522.PCD_Init();
-    
-    // Initialize the relay pin as an output
-    pinMode(relayPin, OUTPUT);
-    
-    // Initialize the push button pins as inputs with internal pull-up resistors
-    pinMode(onButtonPin, INPUT_PULLUP);
-    pinMode(offButtonPin, INPUT_PULLUP);
-    pinMode(emergencyStopPin, INPUT_PULLUP);
-
-    // Initialize the LED and Buzzer pins as outputs
-    pinMode(relayLedPin, OUTPUT);
-    pinMode(emergencyLedPin, OUTPUT);
-    pinMode(buzzerPin, OUTPUT);
-
-    // Initialize the LCD
-    lcd.init();
-    lcd.backlight();
-    lcd.setCursor(0, 0);
-    lcd.print("Tap RFID or");
-    lcd.setCursor(0, 1);
-    lcd.print("Push Button");
+  // Initialize serial communications with the PC
+  Serial.begin(9600);
+  
+  // Initialize the relay pin as an output and make sure the relay is OFF initially
+  pinMode(relayPin, OUTPUT);
+  digitalWrite(relayPin, HIGH); // Set relay to HIGH (off)
+  
+  // Initialize the pushbutton pin as an input with pullup resistor
+  pinMode(buttonPin, INPUT_PULLUP); // Use INPUT_PULLUP to avoid floating state
+  
+  // Initialize the SPI bus
+  SPI.begin();
+  
+  // Initialize the MFRC522 RFID module
+  mfrc522.PCD_Init();
+  Serial.println("Scan an RFID tag or card...");
+  
+  // Initialize the LCD
+  lcd.init();
+  lcd.backlight();
+  lcd.setCursor(0, 0);
+  lcd.print("Scan RFID card");
 }
 
 void loop() {
-    // Check if the emergency stop button is pressed
-    if (digitalRead(emergencyStopPin) == LOW) {
-        // Turn off the relay
-        digitalWrite(relayPin, LOW);
-        // Turn off the relay LED
-        digitalWrite(relayLedPin, LOW);
-        // Turn on the emergency LED
-        digitalWrite(emergencyLedPin, HIGH);
-        // Display emergency stop message on the LCD
-        lcd.clear();
-        lcd.setCursor(0, 0);
-        lcd.print("Emergency Stop");
-        while (digitalRead(emergencyStopPin) == LOW) {
-            // Wait here until the emergency stop button is released
-        }
-        // Turn off the emergency LED
-        digitalWrite(emergencyLedPin, LOW);
-        // Reset the LCD message after the emergency stop button is released
-        lcd.clear();
-        lcd.setCursor(0, 0);
-        lcd.print("Tap RFID or");
-        lcd.setCursor(0, 1);
-        lcd.print("Push Button");
+  // Check for new cards
+  if (mfrc522.PICC_IsNewCardPresent() && mfrc522.PICC_ReadCardSerial()) {
+    // Show UID on serial monitor
+    Serial.print("UID tag :");
+    String content = "";
+    for (byte i = 0; i < mfrc522.uid.size; i++) {
+      Serial.print(mfrc522.uid.uidByte[i] < 0x10 ? " 0" : " ");
+      Serial.print(mfrc522.uid.uidByte[i], HEX);
+      content.concat(String(mfrc522.uid.uidByte[i] < 0x10 ? " 0" : " "));
+      content.concat(String(mfrc522.uid.uidByte[i], HEX));
     }
+    Serial.println();
+    content.toUpperCase();
     
-    // Check if a new RFID card is present
-    if (mfrc522.PICC_IsNewCardPresent() && mfrc522.PICC_ReadCardSerial()) {
-        // Read the card UID
-        String cardUID = "";
-        for (byte i = 0; i < mfrc522.uid.size; i++) {
-            cardUID += String(mfrc522.uid.uidByte[i] < 0x10 ? "0" : "");
-            cardUID += String(mfrc522.uid.uidByte[i], HEX);
-        }
-        
-        // Print the card UID to the serial monitor
-        Serial.print("Card UID: ");
-        Serial.println(cardUID);
-        
-        // Check if the card is authorized
-        if (cardUID == authorizedCardUID) {
-            // Check if the on button is pressed
-            if (digitalRead(onButtonPin) == LOW) {
-                // Turn on the relay
-                digitalWrite(relayPin, HIGH);
-                // Turn on the relay LED
-                digitalWrite(relayLedPin, HIGH);
+    // Example: Check if the card UID matches a known UID
+    if (content.substring(1) == "BB 27 AF 13") {
+      authorized = true; // Set authorized flag to true
+      Serial.println("Authorized access");
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("Authorized RFID");
 
-                // Display message on the LCD
-                lcd.clear();
-                lcd.setCursor(0, 0);
-                lcd.print("Relay ON");
+      // Add a 1-second delay before showing the next message
+      delay(1000); // Wait for 1 second
+      
+      // Display "Push the" on the first line and "button to start" on the second line
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("Push the");
+      lcd.setCursor(0, 1);
+      lcd.print("button to start");
 
-                // Countdown from 10 to 0
-                for (int i = 10; i >= 0; i--) {
-                    lcd.setCursor(0, 1);
-                    lcd.print("Countdown: ");
-                    lcd.print(i);
-
-                    // Make a ticking sound when the timer reaches 3 seconds
-                    if (i <= 3) {
-                        digitalWrite(buzzerPin, HIGH);
-                        delay(100); // Buzz for 100ms
-                        digitalWrite(buzzerPin, LOW);
-                    }
-                    delay(1000); // Wait for 1 second
-                }
-
-                // Turn off the relay after the countdown
-                digitalWrite(relayPin, LOW);
-                // Turn off the relay LED
-                digitalWrite(relayLedPin, LOW);
-                lcd.clear();
-                lcd.setCursor(0, 0);
-                lcd.print("Relay OFF");
-            }
-        } else {
-            // Display unauthorized message on the LCD
-            lcd.clear();
-            lcd.setCursor(0, 0);
-            lcd.print("Unauthorized");
-            lcd.setCursor(0, 1);
-            lcd.print("Card");
-            delay(2000); // Display the message for 2 seconds
-            // Reset the LCD message after displaying the unauthorized message
-            lcd.clear();
-            lcd.setCursor(0, 0);
-            lcd.print("Tap RFID or");
-            lcd.setCursor(0, 1);
-            lcd.print("Push Button");
-        }
-
-        // Halt the PICC (RFID card) until a new card is present
-        mfrc522.PICC_HaltA();
-        mfrc522.PCD_StopCrypto1();
+      
+    } else {
+      Serial.println("Unauthorized access");
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("Unauthorized");
+      authorized = false; // Set authorized flag to false
+      delay(2000); // Display the message for 2 seconds
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("Scan RFID card");
     }
+    delay(2000); // Display the message for 2 seconds
+  }
+
+  // Read the state of the pushbutton value
+  int buttonState = digitalRead(buttonPin);
+
+  // Check if the RFID is authorized and the pushbutton is pressed
+  if (authorized && buttonState == HIGH) { // Button pressed is LOW due to INPUT_PULLUP
+    if (!relayActive) {
+      // Activate the relay
+      digitalWrite(relayPin, LOW); // Turn relay on
+      relayActive = true;
+      relayTimer = millis(); // Record the start time of relay activation
+      
+      // Display relay activation message on LCD
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("Relay ON");
+      lcd.setCursor(0, 1);
+      lcd.print("Time left: ");
+    }
+  }
+
+  // Check if relay timer has expired
+  if (relayActive && (millis() - relayTimer >= relayDuration)) {
+    relayActive = false;
+    digitalWrite(relayPin, HIGH); // Turn relay off
     
-    // Check if the button to turn off the relay is pressed
-    if (digitalRead(offButtonPin) == LOW) {
-        // Turn off the relay
-        digitalWrite(relayPin, LOW);
-        // Turn off the relay LED
-        digitalWrite(relayLedPin, LOW);
-        lcd.clear();
-        lcd.setCursor(0, 0);
-        lcd.print("Relay OFF");
-    }
+    // Reset the authorized flag so the user needs to tap the RFID again
+    authorized = false;
 
-    // Other loop code...
+    // Display relay deactivation message on LCD
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Relay OFF");
+    delay(2000); // Display "Relay OFF" for 2 seconds
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Scan RFID card");
+  }
+
+  // Update LCD with remaining time if relay is active
+  if (relayActive) {
+    unsigned long elapsedTime = millis() - relayTimer;
+    unsigned long remainingTime = relayDuration - elapsedTime;
+    
+    lcd.setCursor(11, 1);
+    lcd.print(remainingTime / 1000); // Print remaining seconds
+  }
 }
